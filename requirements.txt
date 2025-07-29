@@ -1,0 +1,7 @@
+streamlit
+pandas
+yfinance
+matplotlib
+plotly
+tradingview_ta
+sqlalchemy
