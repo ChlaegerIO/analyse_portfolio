@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 import pandas as pd
 from pathlib import Path
 
@@ -90,11 +90,8 @@ def add_to_watchlist(Name, Ticker, Currency, Comment, Type, engine=engine_watchl
     }])
     df.to_sql("watchlist", engine, if_exists="append", index=False)
 
-def remove_from_watchlist(Ticker, engine=engine_watchlist):
-    if not isinstance(Ticker, str):
-        raise ValueError("Ticker must be a string")
-
-    query = "DELETE FROM watchlist WHERE Ticker = ?"
-    with engine.connect() as conn:
-        conn.execute(query, (Ticker,))
+def remove_from_watchlist(Ticker):
+    with engine_watchlist.begin() as conn:
+        query = text("DELETE FROM watchlist WHERE Ticker = :ticker")
+        conn.execute(query, {"ticker": Ticker})
     print(f"Removed {Ticker} from watchlist")
