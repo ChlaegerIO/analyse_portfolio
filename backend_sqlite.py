@@ -13,8 +13,42 @@ def insert_transactions(df: pd.DataFrame):
 def get_transactions(engine=engine_portfolio) -> pd.DataFrame:
     return pd.read_sql("SELECT * FROM transactions", engine)
 
+def update_positions(df: pd.DataFrame):
+    """
+    Update the current positions in the backend.
+    """
+    df.to_sql("current_positions", engine_portfolio, if_exists="replace", index=False)
+
+def get_current_positions(engine=engine_portfolio) -> pd.DataFrame:
+    return pd.read_sql("SELECT * FROM current_positions", engine)
+
+def get_watchlist(engine=engine_watchlist) -> pd.DataFrame:
+    try:
+        return pd.read_sql("SELECT * FROM watchlist", engine)
+    except Exception as e:
+        print(f"Fehler beim Laden der Watchlist: {e}")
+        return pd.DataFrame(columns=["Name", "Ticker", "Currency", "Comment", "Type"])
+
+def add_to_watchlist(Name, Ticker, Currency, Comment, Type, engine=engine_watchlist):
+    df = pd.DataFrame([{
+        "Name": Name,
+        "Ticker": Ticker,
+        "Currency": Currency,
+        "Comment": Comment,
+        "Type": Type
+    }])
+    df.to_sql("watchlist", engine, if_exists="append", index=False)
+
+def remove_from_watchlist(Ticker):
+    with engine_watchlist.begin() as conn:
+        query = text("DELETE FROM watchlist WHERE Ticker = :ticker")
+        conn.execute(query, {"ticker": Ticker})
+    print(f"Removed {Ticker} from watchlist")
+
 def read_yuh_csv(file) -> pd.DataFrame:
-    # Versuche, das Trennzeichen automatisch zu erkennen und fehlerhafte Zeilen zu überspringen
+    """
+    Read a yuh csv file and create a pandas dataframe
+    """
     try:
         df = pd.read_csv(file, sep=';', engine='python', on_bad_lines='skip')
     except Exception as e:
@@ -55,6 +89,10 @@ def read_yuh_csv(file) -> pd.DataFrame:
     df.rename(columns=column_map, inplace=True)
     df["platform"] = "Yuh"
 
+    # merge buy_currency and sell_currency and take the one that is not NULL, then remove the original columns
+    df["currency"] = df["buy_currency"].combine_first(df["sell_currency"])
+    df.drop(columns=["buy_currency", "sell_currency"], inplace=True)
+
     # If the table is empty, insert all
     if existing.empty:
         insert_transactions(df)
@@ -72,26 +110,3 @@ def read_yuh_csv(file) -> pd.DataFrame:
         print(f"Merged {len(new_rows)} new transactions from Yuh CSV")
         print(f"new_rows", new_rows)
     return new_rows
-
-def get_watchlist(engine=engine_watchlist) -> pd.DataFrame:
-    try:
-        return pd.read_sql("SELECT * FROM watchlist", engine)
-    except Exception as e:
-        print(f"Fehler beim Laden der Watchlist: {e}")
-        return pd.DataFrame(columns=["Name", "Ticker", "Currency", "Comment", "Type"])
-
-def add_to_watchlist(Name, Ticker, Currency, Comment, Type, engine=engine_watchlist):
-    df = pd.DataFrame([{
-        "Name": Name,
-        "Ticker": Ticker,
-        "Currency": Currency,
-        "Comment": Comment,
-        "Type": Type
-    }])
-    df.to_sql("watchlist", engine, if_exists="append", index=False)
-
-def remove_from_watchlist(Ticker):
-    with engine_watchlist.begin() as conn:
-        query = text("DELETE FROM watchlist WHERE Ticker = :ticker")
-        conn.execute(query, {"ticker": Ticker})
-    print(f"Removed {Ticker} from watchlist")
