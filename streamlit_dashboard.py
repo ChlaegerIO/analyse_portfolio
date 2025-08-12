@@ -26,11 +26,15 @@ portfolio = pd.DataFrame({
 
 # --- Currency Conversion ---
 @st.cache_data(ttl=300)
-def get_fx_rates():
-    usd_chf = yf.Ticker("USDCHF=X").history(period="1d")["Close"].iloc[-1]
-    return usd_chf
+def get_fx_rates(fx_type):
+    if fx_type == 'usd_chf':
+        fx_rate = yf.Ticker("USDCHF=X").history(period="1d")["Close"].iloc[-1]
+    elif fx_type == 'eur_chf':
+        fx_rate = yf.Ticker("EURCHF=X").history(period="1d")["Close"].iloc[-1]
+    return fx_rate
 
-usd_chf = get_fx_rates()
+usd_chf = get_fx_rates('usd_chf')
+eur_chf = get_fx_rates('eur_chf')
 
 # --- KPI Fetch ---
 @st.cache_data(ttl=300)
@@ -55,15 +59,27 @@ def fetch_kpis(ticker):
 kpis = portfolio["Ticker"].apply(fetch_kpis)
 portfolio = pd.concat([portfolio, kpis], axis=1)
 
+# Entferne doppelte Spaltennamen
+portfolio = portfolio.loc[:, ~portfolio.columns.duplicated()]
+
 # --- Preis & Kennzahlen ---
-portfolio["Current Price"] = portfolio["Raw Price"]
+if "Raw Price" in portfolio.columns:
+    portfolio["Current Price"] = portfolio["Raw Price"]
+else:
+    # Fallback: Hole die Preise direkt
+    portfolio["Current Price"] = portfolio["Ticker"].apply(lambda t: fetch_kpis(t).get("Raw Price", None))
 
 def convert_to_chf(row):
+    price = row.get("Current Price", None)
+    if price is None:
+        return 0
     if row["Currency"] == "USD":
-        return row["Current Price"] * usd_chf
+        return price * usd_chf
     elif row["Currency"] == "CHF":
-        return row["Current Price"]
-    return None
+        return price
+    elif row["Currency"] == "EUR":
+        return price * eur_chf
+    return 0
 
 portfolio["Value (CHF)"] = portfolio.apply(lambda row: convert_to_chf(row) * row["Units"], axis=1)
 portfolio["Profit/Loss"] = (portfolio["Current Price"] - portfolio["Buy Price"]) * portfolio["Units"]
@@ -72,7 +88,8 @@ portfolio["Profit/Loss (%)"] = ((portfolio["Current Price"] - portfolio["Buy Pri
 # --- Rundung ---
 round_cols = ["Buy Price", "Current Price", "Value (CHF)", "Profit/Loss", "Profit/Loss (%)", "EPS", "PE Ratio",
               "PEG Ratio", "Beta", "Free Cash Flow", "Revenue Growth YoY (%)"]
-portfolio[round_cols] = portfolio[round_cols].round(3)
+existing_round_cols = [col for col in round_cols if col in portfolio.columns]
+portfolio[existing_round_cols] = portfolio[existing_round_cols].round(3)
 
 # --- Portfolio Summary ---
 total_value_chf = portfolio["Value (CHF)"].sum()
@@ -101,17 +118,22 @@ if page == "Portfolio":
 
 
     # --- Portfolio Entwicklungsdiagramm ---
-    st.markdown("### 📈 Portfolio Entwicklung")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=portfolio["Ticker"], y=portfolio["Value (CHF)"], mode="lines+markers", name="Portfolio Value", line=dict(color="royalblue")))
-    fig.update_layout(title="Portfolio Value by Ticker",
-                      xaxis_title="Ticker", yaxis_title="Value (CHF)", height=500)
-    st.plotly_chart(fig, use_container_width=True)
+    if len(portfolio) > 0:
+        st.markdown("### 📈 Portfolio Entwicklung")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=portfolio["Ticker"], y=portfolio["Value (CHF)"], mode="lines+markers", name="Portfolio Value", line=dict(color="royalblue")))
+        fig.update_layout(title="Portfolio Value by Ticker",
+                        xaxis_title="Ticker", yaxis_title="Value (CHF)", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Nur existierende Spalten anzeigen
+    stocks_cols = [col for col in cols_order if col in stocks_df.columns]
+    etfs_cols = [col for col in cols_order if col in etfs_df.columns]
 
     st.markdown("### 📌 Current Positions – Stocks")
-    st.dataframe(stocks_df[cols_order], use_container_width=True)
+    st.dataframe(stocks_df[stocks_cols], use_container_width=True)
     st.markdown("### 📌 Current Positions – ETFs")
-    st.dataframe(etfs_df[cols_order], use_container_width=True)
+    st.dataframe(etfs_df[etfs_cols], use_container_width=True)
 
     # --- Alle Transaktionen anzeigen ---
     st.markdown("---")
@@ -186,15 +208,22 @@ elif page == "Watchlist & Kursentwicklung":
     st.markdown("### 📈 Kursentwicklung anzeigen")
     all_tickers = pd.concat([portfolio[["Name", "Ticker"]], watchlist[["Name", "Ticker"]]])
     selected_name = st.selectbox("Wähle eine Position aus dem Portfolio oder Watchlist:", all_tickers["Name"])
-    selected_ticker = all_tickers[all_tickers["Name"] == selected_name]["Ticker"].values[0]
+    ticker_values = all_tickers[all_tickers["Name"] == selected_name]["Ticker"].values
+    selected_ticker = ticker_values[0] if len(ticker_values) > 0 else None
 
-    @st.cache_data(ttl=3600)
-    def get_history(ticker):
-        return yf.Ticker(ticker).history(period="5y", interval="1d")
+    if selected_ticker:
+        @st.cache_data(ttl=3600)
+        def get_history(ticker):
+            return yf.Ticker(ticker).history(period="5y", interval="1d")
 
-    hist = get_history(selected_ticker)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"], mode="lines", name="Kurs", line=dict(color="royalblue")))
-    fig.update_layout(title=f"Kursentwicklung von {selected_ticker} (5 Jahre, täglich)",
-                      xaxis_title="Datum", yaxis_title="Kurs", height=500)
-    st.plotly_chart(fig, use_container_width=True)
+        hist = get_history(selected_ticker)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"], mode="lines", name="Kurs", line=dict(color="royalblue")))
+        fig.update_layout(title=f"Kursentwicklung von {selected_ticker} (5 Jahre, täglich)",
+                          xaxis_title="Datum", yaxis_title="Kurs", height=500)
+        st.plotly_chart(fig, use_container_width=True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"], mode="lines", name="Kurs", line=dict(color="royalblue")))
+        fig.update_layout(title=f"Kursentwicklung von {selected_ticker} (5 Jahre, täglich)",
+                          xaxis_title="Datum", yaxis_title="Kurs", height=500)
+        st.plotly_chart(fig, use_container_width=True)
