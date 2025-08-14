@@ -4,6 +4,7 @@ import pandas as pd
 import backend_sqlite
 import yfinance as yf
 import re
+import concurrent.futures
 
 # --- Currency Conversion ---
 @st.cache_data(ttl=300)
@@ -28,8 +29,22 @@ def get_fx_rate(fx_type, date):
         rx_rate = yf.Ticker("EURCHF=X").history(start=date, end=date, interval="1d")["Close"].iloc[0]
     return rx_rate
 
+def convert_to_chf(row):
+    usd_chf = get_current_fx_rates('usd_chf')
+    eur_chf = get_current_fx_rates('eur_chf')
+    price = row.get("Current Price", None)
+    if price is None:
+        return 0
+    if row["Currency"] == "USD":
+        return price * usd_chf
+    elif row["Currency"] == "CHF":
+        return price
+    elif row["Currency"] == "EUR":
+        return price * eur_chf
+    return 0
 
 def get_current_positions():
+    print("get_current_positions start")
     df = backend_sqlite.get_transactions()
     df = df[df["buy_sell"].isin(["BUY", "SELL"])].copy()
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0)
@@ -56,13 +71,17 @@ def get_current_positions():
     positions["Name"] = positions["Name"].str.replace(r'^.*x ', '', regex=True).str.rstrip('"')
     positions["Currency"] = positions["currency"]
 
+    print("get_current_positions vor fetch_kpis")
+
     # Nur Positionen mit Bestand > 0
     positions = positions[positions["Quantity"] > 0].copy()
     positions = positions[["Name", "Ticker", "Currency", "Quantity", "Buy Price"]]
-    kpis = positions["Ticker"].apply(fetch_kpis)
+    kpis = positions.apply(lambda row: fetch_kpis(row["Ticker"], row["Currency"]), axis=1)
     positions = pd.concat([positions, kpis], axis=1)
 
     backend_sqlite.update_positions(positions)
+
+    print(f"get_current_positions end, found {len(positions)} positions")
 
     return positions
 
@@ -127,9 +146,40 @@ def get_total_graph_chf(periode, interval):
     # graph list or pandas dataframe
 
 @st.cache_data(ttl=300)
-def fetch_kpis(ticker):
+def fetch_kpis(ticker, currency):
+    "fetch data from Yahoo Finance - can take some time plus can fail"
+    # Add crypto ticker mapping
+    special_ticker_map = {
+        "ADA": "ADA-USD",
+        "ALG": "ALGO-USD",
+        "ASML": "ASML.AS",
+        "DOT": "DOT-USD",
+        "ETH": "ETH-USD",
+        "LNK": "LINK-USD",
+        "LTC": "LTC-USD",
+        "XBT": "BTC-USD",
+        "RND": "RENDER-USD",
+        "VAX": "AVAX-USD",
+        "ETH": "ETH-USD",
+        "SOL": "SOL-USD",
+        "XRP": "XRP-USD",
+        "GAL": "GAL-USD",
+        "AAV": "AAV-USD",
+        "BNT": "BNT-USD",
+        "POL": "POL-USD",
+        "0x": "0x-USD",
+        "CHDVD SW Equity": "CHDVD",
+        # Add more mappings as needed
+    }
     try:
-        stock = yf.Ticker(ticker)
+        if ticker in special_ticker_map:
+            print(f"map {ticker} to {special_ticker_map[ticker]}")
+            stock = yf.Ticker(special_ticker_map[ticker])
+        elif currency == "CHF":
+            stock = yf.Ticker(f"{ticker}.SW")
+        else:
+            print(f"normal ticker {ticker}")
+            stock = yf.Ticker(ticker)
         info = stock.info
         price = stock.history(period="1d")["Close"].iloc[-1]
         return pd.Series({
@@ -142,5 +192,6 @@ def fetch_kpis(ticker):
             "Free Cash Flow": info.get("freeCashflow"),
             "Revenue Growth YoY (%)": info.get("revenueGrowth") * 100 if info.get("revenueGrowth") else None
         })
-    except:
-        return pd.Series({col: None for col in ["Raw Price", "EPS", "PE Ratio", "Market Cap", "PEG Ratio", "Beta", "Free Cash Flow", "Revenue Growth YoY (%)"]})
+    except Exception as e:
+        print(f"Error fetching data for {ticker}-{currency}: {e} use None")
+        return pd.Series({col: None for col in ["Current Price", "EPS", "PE Ratio", "Market Cap", "PEG Ratio", "Beta", "Free Cash Flow", "Revenue Growth YoY (%)"]})

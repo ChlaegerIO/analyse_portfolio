@@ -15,34 +15,20 @@ import backend_analysis  # Importiere das Backend-Modul für Analysen
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 
 # --- Input Data ---
-current_positions = backend_analysis.get_current_positions()
-
-usd_chf = backend_analysis.get_current_fx_rates('usd_chf')
-eur_chf = backend_analysis.get_current_fx_rates('eur_chf')
+with st.spinner("Lade aktuelle Positionen..."):
+    current_positions = backend_analysis.get_current_positions()
 
 # Entferne doppelte Spaltennamen
 current_positions = current_positions.loc[:, ~current_positions.columns.duplicated()]
 
 # --- Preis & Kennzahlen ---
-if "Raw Price" in current_positions.columns:
-    current_positions["Current Price"] = current_positions["Raw Price"]
-else:
-    # Fallback: Hole die Preise direkt
-    current_positions["Current Price"] = current_positions["Ticker"].apply(lambda t: backend_analysis.fetch_kpis(t).get("Raw Price", None))
+if "Current Price" not in current_positions.columns or current_positions["Current Price"].isnull().any():
+    # Fallback: Hole die Preise direkt bzw. neu
+    current_positions["Current Price"] = current_positions.apply(
+        lambda row: backend_analysis.fetch_kpis(row["Ticker"], row["Currency"]).get("Current Price", None), axis=1
+    )
 
-def convert_to_chf(row):
-    price = row.get("Current Price", None)
-    if price is None:
-        return 0
-    if row["Currency"] == "USD":
-        return price * usd_chf
-    elif row["Currency"] == "CHF":
-        return price
-    elif row["Currency"] == "EUR":
-        return price * eur_chf
-    return 0
-
-current_positions["Value (CHF)"] = current_positions.apply(lambda row: convert_to_chf(row) * row["Quantity"], axis=1)
+current_positions["Value (CHF)"] = current_positions.apply(lambda row: backend_analysis.convert_to_chf(row) * row["Quantity"], axis=1)
 current_positions["Profit/Loss"] = (current_positions["Current Price"] - current_positions["Buy Price"]) * current_positions["Quantity"]
 current_positions["Profit/Loss (%)"] = ((current_positions["Current Price"] - current_positions["Buy Price"]) / current_positions["Buy Price"]) * 100
 
@@ -107,7 +93,26 @@ if page == "Portfolio":
 
 
     st.markdown("### 📌 Current Positions")
-    st.dataframe(current_positions, use_container_width=True)
+    # Editable table for Current Price
+    editable_cols = ["Current Price"]
+    edited_positions = st.data_editor(
+        current_positions,
+        use_container_width=True,
+        column_config={col: st.column_config.NumberColumn() for col in editable_cols},
+        disabled=[col for col in current_positions.columns if col not in editable_cols],
+        num_rows="dynamic"
+    )
+
+    # Check for edits and update database
+    for idx, row in edited_positions.iterrows():
+        orig_price = current_positions.loc[idx, "Current Price"]
+        new_price = row["Current Price"]
+        if pd.notnull(new_price) and new_price != orig_price:
+            ticker = row["Ticker"]
+            backend_sqlite.update_current_price(ticker, new_price)
+            current_positions.loc[idx, "Current Price"] = new_price  # update in-memory
+
+    # st.dataframe(current_positions, use_container_width=True)
 
     # --- Alle Transaktionen anzeigen ---
     st.markdown("---")
@@ -175,7 +180,7 @@ elif page == "Watchlist & Kursentwicklung":
     # --- Kursentwicklung ---
     st.markdown("---")
     st.markdown("### 📈 Kursentwicklung anzeigen")
-    all_tickers = pd.concat([portfolio[["Name", "Ticker"]], watchlist[["Name", "Ticker"]]])
+    all_tickers = pd.concat([current_positions[["Name", "Ticker"]], watchlist[["Name", "Ticker"]]])
     selected_name = st.selectbox("Wähle eine Position aus dem Portfolio oder Watchlist:", all_tickers["Name"])
     ticker_values = all_tickers[all_tickers["Name"] == selected_name]["Ticker"].values
     selected_ticker = ticker_values[0] if len(ticker_values) > 0 else None
@@ -188,6 +193,8 @@ elif page == "Watchlist & Kursentwicklung":
         "6 Monate": ("6mo", "1d"),
         "1 Jahr": ("1y", "1d"),
         "5 Jahre": ("5y", "1d"),
+        "10 Jahre": ("10y", "1wk"),
+        "20 Jahre": ("20y", "1wk"),
         "Max": ("max", "1wk")
     }
     selected_duration = st.selectbox("Zeitraum für Kursentwicklung:", list(duration_map.keys()), index=5)

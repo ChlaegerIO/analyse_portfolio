@@ -11,12 +11,22 @@ def insert_transactions(df: pd.DataFrame):
     df.to_sql("transactions", engine_portfolio, if_exists="append", index=False)
 
 def get_transactions(engine=engine_portfolio) -> pd.DataFrame:
-    return pd.read_sql("SELECT * FROM transactions", engine)
+    try:
+        return pd.read_sql("SELECT * FROM transactions", engine)
+    except Exception as e:
+        print(f"Fehler beim Laden der Transaktionen: {e}")
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame(columns=[
+            "date", "transaction_type", "transaction_info", "buy", "buy_currency",
+            "sell", "sell_currency", "fees", "buy_sell", "quantity", "Ticker", "price_per_unit", "platform", "currency"
+        ])
 
 def update_positions(df: pd.DataFrame):
     """
     Update the current positions in the backend.
     """
+    # Remove duplicate columns before writing to SQL
+    df = df.loc[:, ~df.columns.duplicated()]
     df.to_sql("current_positions", engine_portfolio, if_exists="replace", index=False)
 
 def get_current_positions(engine=engine_portfolio) -> pd.DataFrame:
@@ -27,15 +37,14 @@ def get_watchlist(engine=engine_watchlist) -> pd.DataFrame:
         return pd.read_sql("SELECT * FROM watchlist", engine)
     except Exception as e:
         print(f"Fehler beim Laden der Watchlist: {e}")
-        return pd.DataFrame(columns=["Name", "Ticker", "Currency", "Comment", "Type"])
+        return pd.DataFrame(columns=["Name", "Ticker", "Currency", "Comment"])
 
-def add_to_watchlist(Name, Ticker, Currency, Comment, Type, engine=engine_watchlist):
+def add_to_watchlist(Name, Ticker, Currency, Comment, engine=engine_watchlist):
     df = pd.DataFrame([{
         "Name": Name,
         "Ticker": Ticker,
         "Currency": Currency,
-        "Comment": Comment,
-        "Type": Type
+        "Comment": Comment
     }])
     df.to_sql("watchlist", engine, if_exists="append", index=False)
 
@@ -110,3 +119,17 @@ def read_yuh_csv(file) -> pd.DataFrame:
         print(f"Merged {len(new_rows)} new transactions from Yuh CSV")
         print(f"new_rows", new_rows)
     return new_rows
+
+def update_current_price(ticker, price):
+    """
+    Update the current price for a given ticker in the current_positions table.
+    """
+    import sqlite3
+    conn = sqlite3.connect("portfolio.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE current_positions SET [Current Price]=? WHERE Ticker=?",
+        (price, ticker)
+    )
+    conn.commit()
+    conn.close()
