@@ -68,7 +68,7 @@ def read_yuh_csv(file) -> pd.DataFrame:
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         error_msg = f"Fehlende Spalten in der CSV: {missing_cols}"
-        print(error_msg)
+        print("read_yuh_csv()", error_msg)
         return pd.DataFrame({"Fehler": [error_msg], "Gefundene Spalten": [str(list(df.columns))]})
 
     # Read existing transactions from the database

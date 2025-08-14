@@ -24,9 +24,20 @@ def get_fx_rate(fx_type, date):
     - date: the date for which to retrieve the exchange rate, 'yyy-mm-dd'
     """
     if fx_type == 'usd_chf':
-        rx_rate = yf.Ticker("USDCHF=X").history(start=date, end=date, interval="1d")["Close"].iloc[0]
+        price_series = yf.Ticker("USDCHF=X").history(start=date, end=date, interval="1d")["Close"]
+        if not price_series.empty:
+            rx_rate = price_series.iloc[0]
+        else:
+            # fallback: use latest available rate
+            rx_rate = get_current_fx_rates('usd_chf')
     elif fx_type == 'eur_chf':
-        rx_rate = yf.Ticker("EURCHF=X").history(start=date, end=date, interval="1d")["Close"].iloc[0]
+        price_series = yf.Ticker("EURCHF=X").history(start=date, end=date, interval="1d")["Close"]
+        if not price_series.empty:
+            rx_rate = price_series.iloc[0]
+        else:
+            rx_rate = get_current_fx_rates('eur_chf')
+    else:
+        rx_rate = None
     return rx_rate
 
 def convert_to_chf(row):
@@ -44,7 +55,6 @@ def convert_to_chf(row):
     return 0
 
 def get_current_positions():
-    print("get_current_positions start")
     df = backend_sqlite.get_transactions()
     df = df[df["buy_sell"].isin(["BUY", "SELL"])].copy()
     df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0)
@@ -71,8 +81,6 @@ def get_current_positions():
     positions["Name"] = positions["Name"].str.replace(r'^.*x ', '', regex=True).str.rstrip('"')
     positions["Currency"] = positions["currency"]
 
-    print("get_current_positions vor fetch_kpis")
-
     # Nur Positionen mit Bestand > 0
     positions = positions[positions["Quantity"] > 0].copy()
     positions = positions[["Name", "Ticker", "Currency", "Quantity", "Buy Price"]]
@@ -80,8 +88,6 @@ def get_current_positions():
     positions = pd.concat([positions, kpis], axis=1)
 
     backend_sqlite.update_positions(positions)
-
-    print(f"get_current_positions end, found {len(positions)} positions")
 
     return positions
 
@@ -163,28 +169,26 @@ def fetch_kpis(ticker, currency):
         "ETH": "ETH-USD",
         "SOL": "SOL-USD",
         "XRP": "XRP-USD",
-        "GAL": "GAL-USD",
-        "AAV": "AAV-USD",
+        "GAL": "GALA-USD",
+        "AAV": "AAVE-USD",
         "BNT": "BNT-USD",
         "POL": "POL-USD",
-        "0x": "0x-USD",
-        "CHDVD SW Equity": "CHDVD",
+        "ZRX": "ZRX-USD",
+        "CHDVD SW Equity": "CHDVD.SW",
         # Add more mappings as needed
     }
     try:
         if ticker in special_ticker_map:
-            print(f"map {ticker} to {special_ticker_map[ticker]}")
             stock = yf.Ticker(special_ticker_map[ticker])
         elif currency == "CHF":
             stock = yf.Ticker(f"{ticker}.SW")
         else:
-            print(f"normal ticker {ticker}")
             stock = yf.Ticker(ticker)
         info = stock.info
         price = stock.history(period="1d")["Close"].iloc[-1]
         return pd.Series({
             "Current Price": price,
-            "EPS": info.get("trailingEps"),
+            "Price/Book": info.get("priceToBook"),
             "PE Ratio": info.get("trailingPE"),
             "Market Cap": info.get("marketCap"),
             "PEG Ratio": info.get("pegRatio"),

@@ -56,7 +56,7 @@ if page == "Portfolio":
 
     # Spaltenanordnung
     cols_order = ["Name", "Ticker", "Currency", "Quantity", "Buy Price", "Current Price", "Value (CHF)",
-                  "Profit/Loss", "Profit/Loss (%)", "EPS", "PE Ratio", "Market Cap", "PEG Ratio", "Beta",
+                  "Profit/Loss", "Profit/Loss (%)", "Price/Book", "PE Ratio", "Market Cap", "PEG Ratio", "Beta",
                   "Free Cash Flow", "Revenue Growth YoY (%)"]
 
 
@@ -74,31 +74,86 @@ if page == "Portfolio":
     }
 
     st.markdown("### 📈 Portfolio Entwicklung")
-    portfolio_tickers = pd.concat([current_positions[["Name", "Ticker", "Value (CHF)"]]])
-    portfolio_selection_name = st.selectbox("Wähle eine Position aus dem Portfolio oder Watchlist:", portfolio_tickers["Name"])
-    portfolio_values = portfolio_tickers[portfolio_tickers["Name"] == portfolio_selection_name]["Ticker"]
-    selected_ticker = portfolio_values[0] if len(portfolio_values) > 0 else None
-    portfolio_duration = st.selectbox("Zeitraum für Portfolio:", list(change_duration.keys()), index=5)
-    period, interval = change_duration[portfolio_duration]
 
-    if len(current_positions) > 0:
+    # circle diagram of share per stock - left side
+    fig1 = go.Figure()
+    fig1.add_trace(go.Pie(labels=current_positions["Name"], values=current_positions["Value (CHF)"], name="Portfolio Share"))
+    fig1.update_layout(title="Portfolio Share by Stock")
+    st.plotly_chart(fig1, use_container_width=True)
+
+    portfolio_tickers = pd.concat([current_positions[["Name", "Ticker"]]])
+    selected_name = st.selectbox("Wähle eine Position aus dem Portfolio:", portfolio_tickers["Name"])
+    portfolio_ticker_values = portfolio_tickers[portfolio_tickers["Name"] == selected_name]["Ticker"].values
+    selected_portfolio_ticker = portfolio_ticker_values[0] if len(portfolio_ticker_values) > 0 else None
+
+    # Zeitraum-Auswahl für Kursentwicklung
+    duration_map = {
+        "1 Tag": ("1d", "1m"),
+        "1 Woche": ("1wk", "15m"),
+        "1 Monat": ("1mo", "1d"),
+        "6 Monate": ("6mo", "1d"),
+        "1 Jahr": ("1y", "1d"),
+        "5 Jahre": ("5y", "1d"),
+        "10 Jahre": ("10y", "1wk"),
+        "20 Jahre": ("20y", "1wk"),
+        "Max": ("max", "1wk")
+    }
+    selected_duration = st.selectbox("Zeitraum für Kursentwicklung:", list(duration_map.keys()), index=5)
+    period, interval = duration_map[selected_duration]
+
+    if selected_portfolio_ticker:
+        @st.cache_data(ttl=3600)
+        def get_history(ticker, period, interval):
+            return yf.Ticker(ticker).history(period=period, interval=interval)
+
+        hist = get_history(selected_portfolio_ticker, period, interval)
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=current_positions["Ticker"], y=current_positions["Value (CHF)"], mode="lines+markers", name="Portfolio Value", line=dict(color="royalblue")))
-        fig.update_layout(title="Portfolio Value by Ticker",
-                        xaxis_title="Ticker", yaxis_title="Value (CHF)", height=500)
+        fig.add_trace(go.Scatter(x=hist.index, y=hist["Close"], mode="lines", name="Kurs", line=dict(color="royalblue")))
+        fig.update_layout(title=f"Kursentwicklung von {selected_portfolio_ticker} ({selected_duration}, {interval})",
+                          xaxis_title="Datum", yaxis_title="Kurs", height=500)
+        
+        # Get transactions for this ticker and add buy/sell points to graph
+        transactions = backend_sqlite.get_transactions()
+        transactions = transactions[transactions["Ticker"] == selected_portfolio_ticker].copy()
+        transactions["date"] = pd.to_datetime(transactions["date"], dayfirst=True, errors="coerce")
+
+        # Buy markers
+        buys = transactions[transactions["buy_sell"] == "BUY"]
+        buy_dates = buys["date"]
+        buy_prices = buys["price_per_unit"]
+        # buy_prices = [hist["Close"].loc[date] if date in hist.index else None for date in buy_dates]
+        fig.add_trace(go.Scatter(
+            x=buy_dates, y=buy_prices,
+            mode="markers", name="Buy",
+            marker=dict(color="green", size=12, symbol="triangle-up", line=dict(width=2, color="black")),
+            showlegend=True
+        ))
+
+        # Sell markers
+        sells = transactions[transactions["buy_sell"] == "SELL"]
+        sell_dates = sells["date"]
+        sell_prices = sells["price_per_unit"]
+        # sell_prices = [hist["Close"].loc[date] if date in hist.index else None for date in sell_dates]
+        fig.add_trace(go.Scatter(
+            x=sell_dates, y=sell_prices,
+            mode="markers", name="Sell",
+            marker=dict(color="red", size=12, symbol="triangle-down", line=dict(width=2, color="black")),
+            showlegend=True
+        ))
+
         st.plotly_chart(fig, use_container_width=True)
 
-    else:
-        st.warning("Keine Daten für die Portfolioentwicklung verfügbar.")
-
-
     st.markdown("### 📌 Current Positions")
-    # Editable table for Current Price
+    # Editable table for Current Price, with "Name" column pinned
     editable_cols = ["Current Price"]
     edited_positions = st.data_editor(
         current_positions,
         use_container_width=True,
-        column_config={col: st.column_config.NumberColumn() for col in editable_cols},
+        column_order=["Name"] + [col for col in current_positions.columns if col != "Name"],
+        column_config={
+            "Name": st.column_config.TextColumn(disabled=True, pinned=True),
+            **{col: st.column_config.NumberColumn() for col in editable_cols}
+        },
         disabled=[col for col in current_positions.columns if col not in editable_cols],
         num_rows="dynamic"
     )
