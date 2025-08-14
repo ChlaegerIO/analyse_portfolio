@@ -144,30 +144,37 @@ if page == "Portfolio":
         st.plotly_chart(fig, use_container_width=True)
 
     st.markdown("### 📌 Current Positions")
-    # Editable table for Current Price, with "Name" column pinned
-    editable_cols = ["Current Price"]
-    edited_positions = st.data_editor(
+    # Display table with sorting enabled
+    st.dataframe(
         current_positions,
         use_container_width=True,
-        column_order=["Name"] + [col for col in current_positions.columns if col != "Name"],
-        column_config={
-            "Name": st.column_config.TextColumn(disabled=True, pinned=True),
-            **{col: st.column_config.NumberColumn() for col in editable_cols}
-        },
-        disabled=[col for col in current_positions.columns if col not in editable_cols],
-        num_rows="dynamic"
+        height=400
     )
 
-    # Check for edits and update database
-    for idx, row in edited_positions.iterrows():
-        orig_price = current_positions.loc[idx, "Current Price"]
-        new_price = row["Current Price"]
-        if pd.notnull(new_price) and new_price != orig_price:
-            ticker = row["Ticker"]
-            backend_sqlite.update_current_price(ticker, new_price)
-            current_positions.loc[idx, "Current Price"] = new_price  # update in-memory
+    # Optionally, provide an "Edit" button to open st.data_editor for editing
+    if st.button("Edit Current Prices"):
+        editable_cols = ["Current Price"]
+        edited_positions = st.data_editor(
+            current_positions,
+            use_container_width=True,
+            column_order=["Name"] + [col for col in current_positions.columns if col != "Name"],
+            column_config={
+                "Name": st.column_config.TextColumn(disabled=True, pinned=True),
+                **{col: st.column_config.NumberColumn() for col in editable_cols}
+            },
+            disabled=[col for col in current_positions.columns if col not in editable_cols],
+            num_rows="dynamic"
+        )
 
-    # st.dataframe(current_positions, use_container_width=True)
+        # Check for edits and update database
+        for idx, row in edited_positions.iterrows():
+            orig_price = current_positions.loc[idx, "Current Price"]
+            new_price = row["Current Price"]
+            if pd.notnull(new_price) and new_price != orig_price:
+                ticker = row["Ticker"]
+                backend_sqlite.update_current_price(ticker, new_price)
+                current_positions.loc[idx, "Current Price"] = new_price  # update in-memory
+
 
     # --- Alle Transaktionen anzeigen ---
     st.markdown("---")
